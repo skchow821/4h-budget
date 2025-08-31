@@ -302,6 +302,38 @@ class BudgetMap {
     return this._getAccumulations(entry => { return entry.expense; });
   }
 
+  getFilteredLookup(fnEntrySelect) {
+    let filteredLut = {};
+    
+    Object.keys(this.lut).forEach(subAccount => {
+      let filteredCategories = {};
+      
+      Object.keys(this.lut[subAccount]).forEach(category => {
+        let entry = fnEntrySelect(this.lut[subAccount][category]);
+        
+        // Only include entries where money was budgeted or spent
+        if (entry.actual !== 0.0 || entry.budgeted !== 0.0) {
+          filteredCategories[category] = this.lut[subAccount][category];
+        }
+      });
+      
+      // Only include subaccounts that have categories
+      if (Object.keys(filteredCategories).length > 0) {
+        filteredLut[subAccount] = filteredCategories;
+      }
+    });
+    
+    return filteredLut;
+  }
+
+  getFilteredExpenseLookup() {
+    return this.getFilteredLookup(entry => { return entry.expense; });
+  }
+
+  getFilteredIncomeLookup() {
+    return this.getFilteredLookup(entry => { return entry.income; });
+  }
+
   getBudgetedIncome() {
     return this.reduce((accum, entry) => { return accum + entry.income.budgeted; });
   }
@@ -498,6 +530,47 @@ class FormattedSheet extends BasicSheet {
 
     // Clear table state
     this.activeTable = null;
+  }
+
+  addTableSubsection(subsectionHeader, data, subsectionFooter = null) {
+    if (!this.activeTable) {
+      throw Error("Must call startTable() before adding subsections");
+    }
+
+    // Add subsection header with different styling
+    let sparseSubheader = _convertToSparse([subsectionHeader], this.activeTable.colWidths);
+    this.sheet.getRange(this.curRow, 1, 1, this.activeTable.colsUsed)
+      .setValues(sparseSubheader)
+      .setBackground("#D3D3D3")
+      .setFontWeight('bold')
+      .setFontColor("#000000");
+    this.curRow++;
+    this.activeTable.dataRowCount++;
+
+    // Add subsection data rows
+    data.forEach(row => {
+      if (row.length != this.activeTable.colWidths.length) {
+        throw Error("subsection data length must match colWidths length");
+      }
+      let sparseData = _convertToSparse([row], this.activeTable.colWidths);
+      this.sheet.getRange(this.curRow, 1, 1, this.activeTable.colsUsed).setValues(sparseData);
+      this.curRow++;
+      this.activeTable.dataRowCount++;
+    });
+
+    // Add optional subsection footer
+    if (subsectionFooter) {
+      if (subsectionFooter.length != this.activeTable.colWidths.length) {
+        throw Error("subsection footer length must match colWidths length");
+      }
+      let sparseSubfooter = _convertToSparse([subsectionFooter], this.activeTable.colWidths);
+      this.sheet.getRange(this.curRow, 1, 1, this.activeTable.colsUsed)
+        .setValues(sparseSubfooter)
+        .setFontWeight('bold')
+        .setFontStyle('italic');
+      this.curRow++;
+      this.activeTable.dataRowCount++;
+    }
   }
 
   addTable(header, data, footer, colWidths, formats = null) {
@@ -758,12 +831,38 @@ class BudgetReportSheet extends FormattedSheet {
 
     this.newline();
 
-    this.addTable(
+    const expenseLookup = this.budgetMap.getFilteredExpenseLookup();
+    
+    this.startTable(
           ["Estimated Expenses (DESCRIBE)", "BUDGETED", "ACTUAL"],
-          this.budgetMap.getExpenseEntries(),
-          ["Total Expenses: $", this.budgetMap.getBudgetedExpense(), this.totalLedger.getTotalExpense()],
           [ 3, 1, 1],
           ["string", "currency", "currency"]);
+    
+    // Add regular categories (empty subaccount)
+    if (expenseLookup[""]) {
+      Object.keys(expenseLookup[""]).sort().forEach(category => {
+        const entry = expenseLookup[""][category];
+        this.addTableRow([entry.category, entry.expense.budgeted, entry.expense.actual]);
+      });
+    }
+    
+    // Add each subaccount as a subsection
+    Object.keys(expenseLookup).sort().forEach(subAccount => {
+      if (subAccount === "") { return; }
+      
+      const subaccountData = [];
+      Object.keys(expenseLookup[subAccount]).sort().forEach(category => {
+        const entry = expenseLookup[subAccount][category];
+        subaccountData.push([entry.category, entry.expense.budgeted, entry.expense.actual]);
+      });
+      
+      this.addTableSubsection(
+        [subAccount.toUpperCase(), "", ""],
+        subaccountData
+      );
+    });
+    
+    this.endTable(["Total Expenses: $", this.budgetMap.getBudgetedExpense(), this.totalLedger.getTotalExpense()]);
 
     this.newline();
 
@@ -981,6 +1080,34 @@ function test_formatSheet(){
   sheet.addTableRow(["Apples", 5, 2.50]);
   sheet.addTableRow(["Bananas", 3, 1.25]);
   sheet.endTable(["Total", 8, 3.75]);
+
+  // Test subsection functionality
+  sheet.newline();
+  sheet.heading("Testing Table with Subsections");
+  sheet.startTable(["Category", "Budget", "Actual"], [2, 1, 1], ["string", "currency", "currency"]);
+  
+  // Add first subsection
+  sheet.addTableSubsection(
+    ["INCOME", "", ""],
+    [
+      ["Fundraising", 1000.00, 850.00],
+      ["Donations", 500.00, 600.00]
+    ],
+    ["Income Subtotal", 1500.00, 1450.00]
+  );
+  
+  // Add second subsection
+  sheet.addTableSubsection(
+    ["EXPENSES", "", ""],
+    [
+      ["Equipment", 800.00, 750.00],
+      ["Supplies", 400.00, 450.00],
+      ["Activities", 200.00, 175.00]
+    ],
+    ["Expense Subtotal", 1400.00, 1375.00]
+  );
+  
+  sheet.endTable(["Net Total", 100.00, 75.00]);
 }
 
 function test_BudgetMap() {

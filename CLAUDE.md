@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Google Apps Script-based accounting system for tracking 4H club expenses and budgets. The entire codebase consists of a single JavaScript file (`Code.js`) that integrates with Google Sheets.
+This is a Google Apps Script-based accounting system for tracking 4H club expenses and budgets. The entire codebase consists of a single JavaScript file (`Code.gs`) that integrates with Google Sheets.
 
 ## Architecture
 

@@ -1,16 +1,26 @@
 // Simple accounting system for keeping track of 4H expenses.
+// 2025/02/01
+// v 0.1
+// Sunny Chow
+
 // ---
 // Section: Utility Functions
 // ---
 function _enumerateMonths(startingDate, endingDate) {
+  // Fix endingDate (make it span all the way to the last ms of that date)
+  endingDate.setTime(endingDate.getTime() + 86399999);
+
   if (startingDate > endingDate) {
     throw new Error("Start Date must be before End Date");
   }
+
   let results = [];
   let tempStartDate = new Date(startingDate);
 
   while (tempStartDate < endingDate) {
-    let tempEndDate = new Date(tempStartDate.getFullYear(), tempStartDate.getMonth() + 1, 0);
+    let tempEndDate = new Date(tempStartDate.getFullYear(), tempStartDate.getMonth() + 1, 1);
+    tempEndDate.setTime(tempEndDate.getTime() - 1); // 1 ms before.
+
     if (tempEndDate > endingDate) {
       tempEndDate = endingDate;
     }
@@ -124,6 +134,14 @@ class LedgerEntry {
     this.income = income;
     this.expense = expense;
   }
+
+  label() {
+    let txt = this.subAccount != "" ? this.subAccount + ": " : "";
+    txt += this.category;
+    txt += this.description != "" ? ", " + this.description : "";
+    txt += this.subject != "" ? ", " + this.subject : "";
+    return txt
+  }
 }
 
 class ClubInformation {
@@ -153,7 +171,9 @@ class Ledger {
     this.entries = [];
     entries.forEach(entry => {
       const date = fnDate(entry);
-      if (date == null || date < this.startingDate || date > this.endingDate) {
+      let startingDate = this.startingDate;
+      let endingDate = this.endingDate;
+      if (date == null || isNaN(date) || date < this.startingDate || date > this.endingDate) {
         return;
       }
 
@@ -226,6 +246,10 @@ class BudgetMap {
     if (!this.lut[subAccountLookup] ||
        !this.lut[subAccountLookup][categoryLookup]) {
       categoryLookup = categoryLookup + " - NEW";
+
+      if (!this.lut[subAccountLookup]) {
+         this.lut[subAccountLookup] = {};
+      }
 
       if (!this.lut[subAccountLookup][categoryLookup]) {
         this.lut[subAccountLookup][categoryLookup]
@@ -337,7 +361,7 @@ class BasicSheet {
       fmt = "0";
     }
     if (typeStr === "currency") {
-      fmt = "0.00"
+      fmt = "$#,##0.00"
     }
 		return fmt;
 	}
@@ -432,7 +456,7 @@ class FormattedSheet extends BasicSheet {
 
     let colIdx = 1;
     colWidths.forEach(width => {
-      this.sheet.getRange(tableRowStart, colIdx, tableRows + 1 width).mergeAcross();
+      this.sheet.getRange(tableRowStart, colIdx, tableRows + 1, width).mergeAcross();
       colIdx += width;
     });
 
@@ -446,8 +470,9 @@ class FormattedSheet extends BasicSheet {
       }
       colIdx = 1;
       for (let i = 0; i < formats.length; ++i) {
-        let colFormat = _toFmt(formats[i])
+        let colFormat = this._toFmt(formats[i])
         this.sheet.getRange(tableRowStart+1, colIdx, tableRows, 1).setNumberFormat(colFormat);
+        colIdx += colWidths[i];
       }
     }
   }
@@ -598,7 +623,8 @@ class AnnualFinancialReportSheet extends FormattedSheet {
     this.table(["MONTH", "TOTAL INCOME", "TOTAL EXPENSES", "BALANCE"],
                   data,
                   ["Total", this.totalLedger.getTotalIncome(), this.totalLedger.getTotalExpense(), this.totalLedger.endingBalance],
-                  [1, 1, 1, 1]);
+                  [1, 1, 1, 1],
+                  ["string", "currency", "currency", "currency"]);
   }
 }
 
@@ -628,13 +654,14 @@ class MonthlyReportSheet extends FormattedSheet {
       {
         let entries = ledger.getIncomeEntries();
         let data = entries.length > 0 ? entries.map(entry => {
-          return [entry.category + " - " + entry.description, entry.income];
+          return [entry.label(), entry.income];
         }) : emptyEntry;
         this.table(
           ["Income (SOURCE, USE, PURPOSE)", "Amount"],
           data,
           ["Total Income", ledger.getTotalIncome()],
           [ 3, 1],
+          ["string", "currency"]
         );
       }
       this.newline();
@@ -643,13 +670,14 @@ class MonthlyReportSheet extends FormattedSheet {
       {
         let entries = ledger.getExpenseEntries();
         let data = entries.length > 0 ? entries.map(entry => {
-          return [entry.category + " - " + entry.description, entry.expense];
+          return [entry.label(), entry.expense];
         }) : emptyEntry;
         this.table(
           ["Expense (DESCRIBE)", "Amount"],
           data,
           ["Total Expenses", ledger.getTotalExpense()],
           [ 3, 1],
+          ["string", "currency"]
         );
       }
       this.labelText("Closing Balance $:", ledger.endingBalance, 3);
@@ -684,7 +712,8 @@ class BudgetReportSheet extends FormattedSheet {
           ["Estimated Income (SOURCE, USE, PURPOSE)", "BUDGETED", "ACTUAL"],
           this.budgetMap.getIncomeEntries(),
           ["Total Income: $", this.budgetMap.getBudgetedIncome(), this.totalLedger.getTotalIncome()],
-          [ 3, 1, 1]);
+          [ 3, 1, 1],
+          [ "string", "currency", "currency"]);
 
     this.newline();
 
@@ -692,7 +721,8 @@ class BudgetReportSheet extends FormattedSheet {
           ["Estimated Expenses (DESCRIBE)", "BUDGETED", "ACTUAL"],
           this.budgetMap.getExpenseEntries(),
           ["Total Expenses: $", this.budgetMap.getBudgetedExpense(), this.totalLedger.getTotalExpense()],
-          [ 3, 1, 1]);
+          [ 3, 1, 1],
+          ["string", "currency", "currency"]);
 
     this.newline();
 
@@ -1079,4 +1109,12 @@ function update_balances() {
     const balances = _getBalancesPerBudgetPlanningEntry(clubInfo.bankBalance, entries);
     budgetPlanningSheet.updateBalances(balances);
   }
+}
+
+function onOpen(e) {
+  var menu = SpreadsheetApp.getUi().createAddonMenu(); // Or DocumentApp or SlidesApp or FormApp.
+  menu.addItem('Start', 'create_input_tables');
+  menu.addItem('Update Balances', 'update_balances');
+  menu.addItem('Generate 4H Forms', 'publish_4HForms');
+  menu.addToUi();
 }

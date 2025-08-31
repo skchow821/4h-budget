@@ -417,15 +417,9 @@ class FormattedSheet extends BasicSheet {
     this.curRow++;
   }
 
-  table(header, data, footer, colWidths, formats = null) {
-    if (header.length != data[0].length) {
-      throw Error("header and data lengths must match");
-    }
+  startTable(header, colWidths, formats = null) {
     if (header.length != colWidths.length) {
       throw Error("colWidths and header must be arrays of the same length.");
-    }
-    if (footer.length != header.length) {
-      throw Error("footer and header must be arrays of the same length.");
     }
 
     const colsUsed = colWidths.reduce((accum, value) => accum + value, 0);
@@ -434,47 +428,94 @@ class FormattedSheet extends BasicSheet {
       throw Error("the summation of colWidths must be less than " + this.nCols);
     }
 
-    //header (required)
-    const tableRowStart = this.curRow;
+    // Store table state for endTable
+    this.activeTable = {
+      colWidths: colWidths,
+      colsUsed: colsUsed,
+      tableRowStart: this.curRow,
+      formats: formats,
+      dataRowCount: 0
+    };
+
+    // header
     let sparseHeader = _convertToSparse([header], colWidths);
     this.sheet.getRange(this.curRow, 1, 1, colsUsed).setValues(sparseHeader).setBackground("#008000").setFontColor("#FFFFFF");
     this.curRow++;
+  }
 
-    // datums
-    let sparseData = _convertToSparse(data, colWidths);
-    data.forEach(datum => {
-      this.sheet.getRange(this.curRow, 1, sparseData.length, colsUsed).setValues(sparseData);
-    });
-    this.curRow += sparseData.length;
-    let tableRows = sparseData.length; // number of rows (not including header).
+  addTableRow(data) {
+    if (!this.activeTable) {
+      throw Error("Must call startTable() before adding rows");
+    }
+    if (data.length != this.activeTable.colWidths.length) {
+      throw Error("data length must match colWidths length");
+    }
+
+    let sparseData = _convertToSparse([data], this.activeTable.colWidths);
+    this.sheet.getRange(this.curRow, 1, 1, this.activeTable.colsUsed).setValues(sparseData);
+    this.curRow++;
+    this.activeTable.dataRowCount++;
+  }
+
+  endTable(footer) {
+    if (!this.activeTable) {
+      throw Error("Must call startTable() before endTable()");
+    }
+    if (footer.length != this.activeTable.colWidths.length) {
+      throw Error("footer and header must be arrays of the same length.");
+    }
 
     // footer
-    let sparseFooter = _convertToSparse([footer], colWidths);
-    this.sheet.getRange(this.curRow, 1, 1, colsUsed).setValues(sparseFooter).setFontWeight('bold');
+    let sparseFooter = _convertToSparse([footer], this.activeTable.colWidths);
+    this.sheet.getRange(this.curRow, 1, 1, this.activeTable.colsUsed).setValues(sparseFooter).setFontWeight('bold');
     this.curRow++;
-    tableRows += sparseFooter.length;
 
+    const totalTableRows = this.activeTable.dataRowCount + 1; // +1 for footer
+
+    // Merge cells according to colWidths
     let colIdx = 1;
-    colWidths.forEach(width => {
-      this.sheet.getRange(tableRowStart, colIdx, tableRows + 1, width).mergeAcross();
+    this.activeTable.colWidths.forEach(width => {
+      this.sheet.getRange(this.activeTable.tableRowStart, colIdx, totalTableRows + 1, width).mergeAcross();
       colIdx += width;
     });
 
-    this.sheet.getRange(tableRowStart, 1, sparseData.length + 2, colsUsed)
+    // Add borders
+    this.sheet.getRange(this.activeTable.tableRowStart, 1, totalTableRows + 1, this.activeTable.colsUsed)
       .setBorder(true, true, true, true, true, true, null, SpreadsheetApp.BorderStyle.SOLID);
 
-    // set formats (for all rows other than header row).
-    if (formats != null) {
-      if (formats.length != data.length && formats.length != colWidths.length) {
-        throw Error("formats, colWidths, and data lengths must be the same");
+    // Apply formats (for data rows only, not header or footer)
+    if (this.activeTable.formats != null) {
+      if (this.activeTable.formats.length != this.activeTable.colWidths.length) {
+        throw Error("formats and colWidths must be arrays of the same length");
       }
       colIdx = 1;
-      for (let i = 0; i < formats.length; ++i) {
-        let colFormat = this._toFmt(formats[i])
-        this.sheet.getRange(tableRowStart+1, colIdx, tableRows, 1).setNumberFormat(colFormat);
-        colIdx += colWidths[i];
+      for (let i = 0; i < this.activeTable.formats.length; ++i) {
+        let colFormat = this._toFmt(this.activeTable.formats[i])
+        this.sheet.getRange(this.activeTable.tableRowStart + 1, colIdx, this.activeTable.dataRowCount, 1).setNumberFormat(colFormat);
+        colIdx += this.activeTable.colWidths[i];
       }
     }
+
+    // Clear table state
+    this.activeTable = null;
+  }
+
+  addTable(header, data, footer, colWidths, formats = null) {
+    if (header.length != data[0].length) {
+      throw Error("header and data lengths must match");
+    }
+    if (footer.length != header.length) {
+      throw Error("footer and header must be arrays of the same length.");
+    }
+
+    // Use the new startTable/endTable methods
+    this.startTable(header, colWidths, formats);
+
+    data.forEach(row => {
+      this.addTableRow(row);
+    });
+
+    this.endTable(footer);
   }
 }
 
@@ -620,7 +661,7 @@ class AnnualFinancialReportSheet extends FormattedSheet {
       ];
     });
 
-    this.table(["MONTH", "TOTAL INCOME", "TOTAL EXPENSES", "BALANCE"],
+    this.addTable(["MONTH", "TOTAL INCOME", "TOTAL EXPENSES", "BALANCE"],
                   data,
                   ["Total", this.totalLedger.getTotalIncome(), this.totalLedger.getTotalExpense(), this.totalLedger.endingBalance],
                   [1, 1, 1, 1],
@@ -656,7 +697,7 @@ class MonthlyReportSheet extends FormattedSheet {
         let data = entries.length > 0 ? entries.map(entry => {
           return [entry.label(), entry.income];
         }) : emptyEntry;
-        this.table(
+        this.addTable(
           ["Income (SOURCE, USE, PURPOSE)", "Amount"],
           data,
           ["Total Income", ledger.getTotalIncome()],
@@ -672,7 +713,7 @@ class MonthlyReportSheet extends FormattedSheet {
         let data = entries.length > 0 ? entries.map(entry => {
           return [entry.label(), entry.expense];
         }) : emptyEntry;
-        this.table(
+        this.addTable(
           ["Expense (DESCRIBE)", "Amount"],
           data,
           ["Total Expenses", ledger.getTotalExpense()],
@@ -708,7 +749,7 @@ class BudgetReportSheet extends FormattedSheet {
     this.labelText("Total Opening Balance: $", this.totalLedger.beginningBalance, 4);
     this.newline();
 
-    this.table(
+    this.addTable(
           ["Estimated Income (SOURCE, USE, PURPOSE)", "BUDGETED", "ACTUAL"],
           this.budgetMap.getIncomeEntries(),
           ["Total Income: $", this.budgetMap.getBudgetedIncome(), this.totalLedger.getTotalIncome()],
@@ -717,7 +758,7 @@ class BudgetReportSheet extends FormattedSheet {
 
     this.newline();
 
-    this.table(
+    this.addTable(
           ["Estimated Expenses (DESCRIBE)", "BUDGETED", "ACTUAL"],
           this.budgetMap.getExpenseEntries(),
           ["Total Expenses: $", this.budgetMap.getBudgetedExpense(), this.totalLedger.getTotalExpense()],
@@ -928,10 +969,18 @@ function test_formatSheet(){
   sheet.newline();
   sheet.newline();
 
-  sheet.table(["Label", "Value1", "Value2"],
+  sheet.addTable(["Label", "Value1", "Value2"],
                  [["foo", 1, 2], ["bar", 3, 4]],
                  ["Total", 5, 6],
                  [     2,      1,       1]);
+
+  // Test new startTable/endTable methods
+  sheet.newline();
+  sheet.heading("Testing startTable/endTable");
+  sheet.startTable(["Item", "Quantity", "Price"], [2, 1, 1], ["string", "int", "currency"]);
+  sheet.addTableRow(["Apples", 5, 2.50]);
+  sheet.addTableRow(["Bananas", 3, 1.25]);
+  sheet.endTable(["Total", 8, 3.75]);
 }
 
 function test_BudgetMap() {
@@ -1111,10 +1160,15 @@ function update_balances() {
   }
 }
 
+function run_tests() {
+  test_formatSheet();
+}
+
 function onOpen(e) {
   var menu = SpreadsheetApp.getUi().createAddonMenu(); // Or DocumentApp or SlidesApp or FormApp.
   menu.addItem('Start', 'create_input_tables');
   menu.addItem('Update Balances', 'update_balances');
   menu.addItem('Generate 4H Forms', 'publish_4HForms');
+  menu.addItem('Run tests', 'run_tests');
   menu.addToUi();
 }

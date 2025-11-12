@@ -1,5 +1,5 @@
 // Simple accounting system for keeping track of 4H expenses.
-// 2025/02/01
+// 2025/11/11
 // v 0.1
 // Sunny Chow
 
@@ -278,17 +278,10 @@ class BudgetMap {
   _getAccumulations(fnEntrySelect) {
     let data = []
 
-    this._addCategoriesFromSubAccount(data, "", fnEntrySelect);
-
-    // Add a Projects sub-heading.
-    data.push(["PROJECTS (SUB_ACCOUNTS)", "", ""]);
-
     // Add sub-projects
     let sortedSubaccounts = Object.keys(this.lut).sort();
 
     sortedSubaccounts.forEach( acct => {
-      if (acct === "") { return };
-
       this._addCategoriesFromSubAccount(data, acct, fnEntrySelect);
     });
     return data;
@@ -304,25 +297,25 @@ class BudgetMap {
 
   getFilteredLookup(fnEntrySelect) {
     let filteredLut = {};
-    
+
     Object.keys(this.lut).forEach(subAccount => {
       let filteredCategories = {};
-      
+
       Object.keys(this.lut[subAccount]).forEach(category => {
         let entry = fnEntrySelect(this.lut[subAccount][category]);
-        
+
         // Only include entries where money was budgeted or spent
         if (entry.actual !== 0.0 || entry.budgeted !== 0.0) {
           filteredCategories[category] = this.lut[subAccount][category];
         }
       });
-      
+
       // Only include subaccounts that have categories
       if (Object.keys(filteredCategories).length > 0) {
         filteredLut[subAccount] = filteredCategories;
       }
     });
-    
+
     return filteredLut;
   }
 
@@ -822,46 +815,56 @@ class BudgetReportSheet extends FormattedSheet {
     this.labelText("Total Opening Balance: $", this.totalLedger.beginningBalance, 4);
     this.newline();
 
-    this.addTable(
+    const incomeLookup = this.budgetMap.getFilteredIncomeLookup();
+
+    this.startTable(
           ["Estimated Income (SOURCE, USE, PURPOSE)", "BUDGETED", "ACTUAL"],
-          this.budgetMap.getIncomeEntries(),
-          ["Total Income: $", this.budgetMap.getBudgetedIncome(), this.totalLedger.getTotalIncome()],
           [ 3, 1, 1],
-          [ "string", "currency", "currency"]);
+          ["string", "currency", "currency"]);
+
+    // Add all subaccounts as subsections (including empty subaccount)
+    Object.keys(incomeLookup).sort().forEach(subAccount => {
+      const subaccountData = [];
+      Object.keys(incomeLookup[subAccount]).sort().forEach(category => {
+        const entry = incomeLookup[subAccount][category];
+        subaccountData.push([entry.category, entry.income.budgeted, entry.income.actual]);
+      });
+
+      const displayName = subAccount.toUpperCase();
+
+      this.addTableSubsection(
+        [displayName, "", ""],
+        subaccountData
+      );
+    });
+
+    this.endTable(["Total Income: $", this.budgetMap.getBudgetedIncome(), this.totalLedger.getTotalIncome()]);
 
     this.newline();
 
     const expenseLookup = this.budgetMap.getFilteredExpenseLookup();
-    
+
     this.startTable(
           ["Estimated Expenses (DESCRIBE)", "BUDGETED", "ACTUAL"],
           [ 3, 1, 1],
           ["string", "currency", "currency"]);
-    
-    // Add regular categories (empty subaccount)
-    if (expenseLookup[""]) {
-      Object.keys(expenseLookup[""]).sort().forEach(category => {
-        const entry = expenseLookup[""][category];
-        this.addTableRow([entry.category, entry.expense.budgeted, entry.expense.actual]);
-      });
-    }
-    
-    // Add each subaccount as a subsection
+
+    // Add all subaccounts as subsections (including empty subaccount)
     Object.keys(expenseLookup).sort().forEach(subAccount => {
-      if (subAccount === "") { return; }
-      
       const subaccountData = [];
       Object.keys(expenseLookup[subAccount]).sort().forEach(category => {
         const entry = expenseLookup[subAccount][category];
         subaccountData.push([entry.category, entry.expense.budgeted, entry.expense.actual]);
       });
-      
+
+      const displayName = subAccount.toUpperCase();
+
       this.addTableSubsection(
-        [subAccount.toUpperCase(), "", ""],
+        [displayName, "", ""],
         subaccountData
       );
     });
-    
+
     this.endTable(["Total Expenses: $", this.budgetMap.getBudgetedExpense(), this.totalLedger.getTotalExpense()]);
 
     this.newline();

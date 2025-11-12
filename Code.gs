@@ -825,16 +825,22 @@ class BudgetReportSheet extends FormattedSheet {
     // Add all subaccounts as subsections (including empty subaccount)
     Object.keys(incomeLookup).sort().forEach(subAccount => {
       const subaccountData = [];
+      let subtotalBudgeted = 0;
+      let subtotalActual = 0;
+
       Object.keys(incomeLookup[subAccount]).sort().forEach(category => {
         const entry = incomeLookup[subAccount][category];
         subaccountData.push([entry.category, entry.income.budgeted, entry.income.actual]);
+        subtotalBudgeted += entry.income.budgeted;
+        subtotalActual += entry.income.actual;
       });
 
       const displayName = subAccount.toUpperCase();
 
       this.addTableSubsection(
         [displayName, "", ""],
-        subaccountData
+        subaccountData,
+        ["Subtotal", subtotalBudgeted, subtotalActual]
       );
     });
 
@@ -852,16 +858,22 @@ class BudgetReportSheet extends FormattedSheet {
     // Add all subaccounts as subsections (including empty subaccount)
     Object.keys(expenseLookup).sort().forEach(subAccount => {
       const subaccountData = [];
+      let subtotalBudgeted = 0;
+      let subtotalActual = 0;
+
       Object.keys(expenseLookup[subAccount]).sort().forEach(category => {
         const entry = expenseLookup[subAccount][category];
         subaccountData.push([entry.category, entry.expense.budgeted, entry.expense.actual]);
+        subtotalBudgeted += entry.expense.budgeted;
+        subtotalActual += entry.expense.actual;
       });
 
       const displayName = subAccount.toUpperCase();
 
       this.addTableSubsection(
         [displayName, "", ""],
-        subaccountData
+        subaccountData,
+        ["Subtotal", subtotalBudgeted, subtotalActual]
       );
     });
 

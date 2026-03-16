@@ -1,6 +1,6 @@
 // Simple accounting system for keeping track of 4H expenses.
-// 2025/11/11
-// v 0.1
+// 2026/03/15
+// v 0.2
 // Sunny Chow
 
 // ---
@@ -71,7 +71,7 @@ function _createMonthlyLedgers(beginningBalance, startingDate, endingDate, entri
   const monthRanges = _enumerateMonths(startingDate, endingDate);
 
   monthRanges.forEach(monthTuple => {
-    const tempLedger = new Ledger(monthTuple[0], monthTuple[1], lastBalance, entries, (entry) => { return entry.dateReconciled});
+    const tempLedger = new GeneralLedger(monthTuple[0], monthTuple[1], lastBalance, entries, (entry) => { return entry.dateReconciled});
     lastBalance = tempLedger.endingBalance;
     monthlyLedgers.push(tempLedger);
   });
@@ -162,7 +162,7 @@ class ClubInformation {
 }
 
 
-class Ledger {
+class GeneralLedger {
   constructor(startingDate, endingDate, beginningBalance, entries, fnDate = (a) => {return a.dateRecorded;} ) {
     this.startingDate = startingDate;
     this.endingDate = endingDate;
@@ -207,22 +207,40 @@ class Ledger {
     return expenseEntries;
   }
 
-  getTotalIncome() {
-    let entries = this.getIncomeEntries();
+  getTotalIncome(entries = null) {
+    let entriesToUse = entries || this.getIncomeEntries();
 
-    let sum = entries.length > 0 ? entries.reduce((accumulator, item) =>
+    let sum = entriesToUse.length > 0 ? entriesToUse.reduce((accumulator, item) =>
       { return accumulator + item.income; }, 0) : 0.0;
 
     return sum;
   }
 
-  getTotalExpense() {
-    let entries = this.getExpenseEntries();
+  getTotalExpense(entries = null) {
+    let entriesToUse = entries || this.getExpenseEntries();
 
-    let sum = entries.length > 0 ? entries.reduce((accumulator, item) =>
+    let sum = entriesToUse.length > 0 ? entriesToUse.reduce((accumulator, item) =>
       { return accumulator + item.expense; }, 0) : 0.0;
 
     return sum;
+  }
+
+  getSubAccountsWithTransactions() {
+    // Get unique sub-accounts that have at least one transaction
+    let subAccountSet = new Set();
+    this.entries.forEach(entry => {
+      subAccountSet.add(entry.subAccount);
+    });
+    // Convert to array and sort alphabetically
+    return Array.from(subAccountSet).sort();
+  }
+
+  getIncomeEntriesForSubAccount(subAccount) {
+    return this.entries.filter(entry => entry.subAccount === subAccount && entry.income > 0.0);
+  }
+
+  getExpenseEntriesForSubAccount(subAccount) {
+    return this.entries.filter(entry => entry.subAccount === subAccount && entry.expense > 0.0);
   }
 }
 
@@ -509,7 +527,7 @@ class FormattedSheet extends BasicSheet {
       .setBorder(true, true, true, true, true, true, null, SpreadsheetApp.BorderStyle.SOLID);
 
     // Apply formats (for data rows only, not header or footer)
-    if (this.activeTable.formats != null) {
+    if (this.activeTable.formats != null && this.activeTable.dataRowCount > 0) {
       if (this.activeTable.formats.length != this.activeTable.colWidths.length) {
         throw Error("formats and colWidths must be arrays of the same length");
       }
@@ -667,7 +685,7 @@ class UserInputSheet extends BasicSheet {
     form.forEach(row => {
       var values = this.sheet.getRange(rowIdx, 1, 1, 2).getValues();
       if (values[0][0] !== row[0]) {
-        throw Error("On row " + rowNo + ", Expected: " + row[0] + ", Found:" + values[0][0] );
+        throw Error("On row " + rowIdx + ", Expected: " + row[0] + ", Found:" + values[0][0] );
       }
 
       if (row[1] == "date") {
@@ -807,7 +825,7 @@ class BudgetReportSheet extends FormattedSheet {
   publish() {
     this.heading("4-H CLUB BUDGET");
     this.labelText("Club Name", this.clubInfo.name, 1);
-    this.newline();
+
     this.paragraph(
       this.clubInfo.startingDate.toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'}) + 
       " to " +
@@ -825,22 +843,16 @@ class BudgetReportSheet extends FormattedSheet {
     // Add all subaccounts as subsections (including empty subaccount)
     Object.keys(incomeLookup).sort().forEach(subAccount => {
       const subaccountData = [];
-      let subtotalBudgeted = 0;
-      let subtotalActual = 0;
-
       Object.keys(incomeLookup[subAccount]).sort().forEach(category => {
         const entry = incomeLookup[subAccount][category];
         subaccountData.push([entry.category, entry.income.budgeted, entry.income.actual]);
-        subtotalBudgeted += entry.income.budgeted;
-        subtotalActual += entry.income.actual;
       });
 
       const displayName = subAccount.toUpperCase();
 
       this.addTableSubsection(
         [displayName, "", ""],
-        subaccountData,
-        ["Subtotal", subtotalBudgeted, subtotalActual]
+        subaccountData
       );
     });
 
@@ -858,22 +870,16 @@ class BudgetReportSheet extends FormattedSheet {
     // Add all subaccounts as subsections (including empty subaccount)
     Object.keys(expenseLookup).sort().forEach(subAccount => {
       const subaccountData = [];
-      let subtotalBudgeted = 0;
-      let subtotalActual = 0;
-
       Object.keys(expenseLookup[subAccount]).sort().forEach(category => {
         const entry = expenseLookup[subAccount][category];
         subaccountData.push([entry.category, entry.expense.budgeted, entry.expense.actual]);
-        subtotalBudgeted += entry.expense.budgeted;
-        subtotalActual += entry.expense.actual;
       });
 
       const displayName = subAccount.toUpperCase();
 
       this.addTableSubsection(
         [displayName, "", ""],
-        subaccountData,
-        ["Subtotal", subtotalBudgeted, subtotalActual]
+        subaccountData
       );
     });
 
@@ -904,6 +910,75 @@ class BudgetReportSheet extends FormattedSheet {
     this.newline();
     this.labelText("County Director or designee*", "[Print Name]", 2);
     this.labelText("Signature", "[Sign]", 4);
+  }
+};
+
+class SubAccountReportSheet extends FormattedSheet {
+  constructor(spreadsheet, clubInfo, ledger, subAccountsData) {
+    super(spreadsheet, "Form 1.2 - Project Balance Sheets", 6, 800);
+    this.clubInfo = clubInfo;
+    this.ledger = ledger;
+    this.startingBalances = subAccountsData;
+    this.clear();
+  }
+
+  publish() {
+    // Get all sub-accounts with transactions, sorted alphabetically
+    const subAccounts = this.ledger.getSubAccountsWithTransactions();
+
+    // Generate a heading table
+    this.heading('4H Club Project Ledger (Sub-Accounts)')
+    this.paragraph(
+      this.clubInfo.startingDate.toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'}) + 
+      " to " + 
+      this.clubInfo.endingDate.toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'}));
+    this.labelText("Club Name:", this.clubInfo.name, 1)
+    this.labelText("Location:", this.clubInfo.address, 1)
+
+    // Generate a section for each sub-account
+    subAccounts.forEach(subAccount => {
+      this._publishSubAccountSection(subAccount);
+      this.newline();
+      this.newline();
+    });
+  }
+
+  _publishSubAccountSection(subAccount) {
+    const displayName = subAccount === "" ? "GENERAL" : subAccount;
+    const startingBalance = this.startingBalances[subAccount] || 0.0;
+    const incomeEntries = this.ledger.getIncomeEntriesForSubAccount(subAccount);
+    const expenseEntries = this.ledger.getExpenseEntriesForSubAccount(subAccount);
+    const totalIncome = this.ledger.getTotalIncome(incomeEntries);
+    const totalExpense = this.ledger.getTotalExpense(expenseEntries);
+    const endingBalance = startingBalance + totalIncome - totalExpense;
+
+    this.labelText('Sub-Account:', displayName, 1)
+    this.labelText('Beginning Balance: $', startingBalance.toFixed(), 5);
+    this.newline()
+
+    // Income table
+    const colWidths = [1, 1, 1, 1, 1, 1];
+    const formats = ["date", "string", "string", "string", "string", "currency"];
+    let header = ["Date", "Receipt No", "Income From", "Purpose/Category", "Description", "Amount"];
+
+    this.startTable(header, colWidths, formats);
+    incomeEntries.forEach(entry => {
+      this.addTableRow([entry.dateReconciled, entry.number, entry.subject, entry.category, entry.description, entry.income]);
+    });
+    this.endTable(["", "", "", "", "Total Income", totalIncome]);
+
+    this.newline();
+
+    // Expense table
+    header = ["Date", "Check No", "Expense Desc", "Purpose/Category", "Description", "Amount"];
+    this.startTable(header, colWidths, formats);
+    expenseEntries.forEach(entry => {
+      this.addTableRow([entry.dateReconciled, entry.number, entry.subject, entry.category, entry.description, entry.expense]);
+    });
+    this.endTable(["", "", "", "", "Total Expenses", totalExpense]);
+
+    this.labelText("Ending Balance: $", endingBalance, 5);
+    this.newline();
   }
 };
 
@@ -994,6 +1069,34 @@ class BudgetPlanningSheet extends UserInputSheet {
 
   updateBalances(balances) {
     this.updateColumn(this.header.length, balances);
+  }
+}
+
+class SubAccountsSheet extends UserInputSheet {
+  constructor(spreadsheet) {
+    super(spreadsheet, "SubAccounts");
+    this.header = [
+      ["Sub-Account", "string"],
+      ["Starting Balance ($)", "currency"],
+    ];
+  }
+
+  populate() {
+    if (!this.isEmpty()) {
+      return;
+    }
+
+    this.setTable(this.header);
+  }
+
+  retrieve() {
+    const results = this.retrieveTableEntries(this.header);
+    var entries = {};
+    results.forEach(row => {
+      if (row[0] === "") return;
+      entries[row[0]] = row[1] === "" ? 0.0 : row[1];
+    });
+    return entries;
   }
 }
 
@@ -1237,6 +1340,9 @@ function create_input_tables() {
 
   let budgetPlanning = new BudgetPlanningSheet(spreadsheet);
   budgetPlanning.populate();
+
+  let subAccounts = new SubAccountsSheet(spreadsheet);
+  subAccounts.populate();
 }
 
 function publish_4HForms() {
@@ -1248,7 +1354,7 @@ function publish_4HForms() {
   let ledgerSheet = new LedgerSheet(spreadsheet);
   const entries = ledgerSheet.retrieve();
 
-  const totalLedger = new Ledger(clubInfo.startingDate, clubInfo.endingDate, clubInfo.bankBalance, entries, (entry) => { return entry.dateReconciled});
+  const totalLedger = new GeneralLedger(clubInfo.startingDate, clubInfo.endingDate, clubInfo.bankBalance, entries, (entry) => { return entry.dateReconciled});
 
   let monthlyLedgers = _createMonthlyLedgers(
     clubInfo.bankBalance,
@@ -1278,6 +1384,14 @@ function publish_4HForms() {
 
     const budgetReport = new BudgetReportSheet(spreadsheet, clubInfo, budgetMap, monthlyLedgers, totalLedger);
     budgetReport.publish();
+  }
+
+  // Project Balance Sheets
+  {
+    const subAccountsSheet = new SubAccountsSheet(spreadsheet);
+    const subAccountsData = subAccountsSheet.retrieve();
+    const subAccountReport = new SubAccountReportSheet(spreadsheet, clubInfo, totalLedger, subAccountsData);
+    subAccountReport.publish();
   }
 }
 
